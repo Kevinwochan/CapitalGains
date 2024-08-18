@@ -318,6 +318,8 @@ def find_current_holdings(trades):
 
 
 def get_current_value(holdings):
+    if holdings.empty:
+        return holdings
     holdings["current_price"] = holdings.apply(
         lambda x: yf.Ticker(x["code"]).info["previousClose"],
         axis=1,

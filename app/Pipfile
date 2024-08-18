@@ -5,6 +5,8 @@ name = "pypi"
 
 [packages]
 streamlit = "*"
+yfinance = "*"
+pysqlite3 = "*"
 
 [dev-packages]
 black = "*"

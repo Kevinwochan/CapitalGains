@@ -22,6 +22,7 @@ NORMALISED_COLUMNS = [
     "brokerage",
     "source",
     "currency",
+    "FY",
 ]
 
 COLUMUMN_CONFIG = {
@@ -35,12 +36,19 @@ COLUMUMN_CONFIG = {
 }
 
 ACTIONS = ["Buy", "Sell", "DRP", "SPP"]
+EFFECTIVE_ACTON = {
+    "Buy": "Buy",
+    "DRP": "Buy",
+    "SPP": "Buy",
+    "Sell": "Sell",
+    "In": "",
+    "Out": "",
+}
 
 
 def parse_csv(csv):
     trades = pd.read_csv(
         csv,
-        usecols=NORMALISED_COLUMNS,
         converters={
             "date": pd.to_datetime,
             "units": int,
@@ -49,6 +57,7 @@ def parse_csv(csv):
     )
     trades["source"].fillna("Manual")
     trades["date"] = pd.to_datetime(trades["date"])
+    trades["FY"] = trades["date"].apply(lambda x: financial_year(x))
     return trades
 
 
@@ -81,6 +90,7 @@ def parse_commsec_csv(csv, currency="AUD"):
             new_row[7] = abs(float(consideration) - (float(units) * float(avg_price)))
             new_row[8] = "Commsec CSV"
             new_row[9] = currency
+            new_row[10] = financial_year(new_row[0])
         except:
             st.error(
                 "Please upload a valid Commsec CSV file from Portfolio -> Accounts -> Transactions -> Set your From and To dates -> Downloads -> CSV",
@@ -119,6 +129,7 @@ def parse_selfwealth_csv(csv, currency="AUD"):
     )
     trades["source"] = "Selfwealth CSV"
     trades["currency"] = currency
+    trades["FY"] = trades["Trade Date"].apply(lambda x: financial_year(x))
     trades.columns = NORMALISED_COLUMNS
     # translate this: 2021-05-28 00:00:00 to a Datetime object
     return trades
@@ -137,7 +148,7 @@ def find_buy_sell_parcels(trades):
     buy_parcels = []
     sell_parcels = []
     for _, row in trades.iterrows():
-        if row["action"] == "Buy" or row["action"] == "DRP" or row["action"] == "SPP":
+        if EFFECTIVE_ACTON[row["action"]] == "Buy":
             buy_parcels.append(row)
         elif row["action"] == "Sell":
             sell_parcels.append(row)
@@ -217,15 +228,14 @@ def display_capital_gains(
     trades_df,
     selected_codes=[],
 ):
-    trades_df["FY"] = trades_df["date"].apply(lambda x: financial_year(x))
     cgt_events = calculate_capital_gains(trades_df)
-    trading_years = sorted(trades_df["FY"].unique().tolist())
+    trading_years = sorted(trades_df["FY"].unique().tolist(), reverse=True)
     for year in trading_years:
         cgt_events_in_year = list(filter(lambda x: x["FY"] == year, cgt_events))
         if not cgt_events_in_year:
             continue
 
-        gain = sum(
+        year_gain = sum(
             [
                 sum(
                     [
@@ -239,8 +249,17 @@ def display_capital_gains(
             ],
         )
         holdings = find_current_holdings(trades_df[trades_df["FY"] < year])
+        if holdings.empty:
+            continue
         holding_sum = holdings["total_cost"].sum()
-        st.subheader(f"{year}: {gain:,.2f} ({(gain/holding_sum*100):,.2f} %)")
+        if year_gain > 0:
+            st.markdown(
+                f"### {year}: :green[{year_gain:,.2f} (+{(year_gain/holding_sum*100):,.2f}%)]",
+            )
+        else:
+            st.markdown(
+                f"{year}: :red[{year_gain:,.2f} (-{(year_gain/holding_sum*100):,.2f} %)]",
+            )
 
         for cgt_event in cgt_events_in_year:
             st.dataframe(
@@ -266,26 +285,39 @@ def display_capital_gains(
             capital_gain = sum(
                 [
                     -(x["avg_price"] * x["units"])
-                    if x["action"] == "Buy"
+                    if EFFECTIVE_ACTON[x["action"]] == "Buy"
                     else (x["avg_price"] * x["units"])
                     for x in cgt_event["trades"]
                 ],
             )
-            st.write(f"Capital Gain: ${capital_gain:,.2f}")
+            total_cost = sum(
+                [
+                    x["avg_price"] * x["units"]
+                    for x in cgt_event["trades"]
+                    if EFFECTIVE_ACTON[x["action"]] == "Buy"
+                ],
+            )
+
+            if capital_gain > 0:
+                st.markdown(
+                    f":green[+{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%) ]",
+                )
+            else:
+                st.markdown(
+                    f":red[-{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%)]",
+                )
 
 
 def find_current_holdings(trades):
-    current_holdings = pd.DataFrame()
+    current_holdings = pd.DataFrame(
+        columns=["code", "units", "total_cost", "avg_price"],
+    )
     for code, sub_df in trades.groupby("code"):
         sorted_trades = sub_df.sort_values("date", ascending=True)  # FIFO
         units = 0
         total_cost = 0
         for _, row in sorted_trades.iterrows():
-            if (
-                row["action"] == "Buy"
-                or row["action"] == "DRP"
-                or row["action"] == "SPP"
-            ):
+            if EFFECTIVE_ACTON[row["action"]] == "Buy":
                 units += row["units"]
                 total_cost += row["avg_price"] * row["units"]
             elif row["action"] == "Sell":
@@ -328,7 +360,12 @@ def get_current_value(holdings):
     holdings["profit"] = (
         holdings["current_price"] * holdings["units"] - holdings["total_cost"]
     )
+
     return holdings
+
+
+def color_gain(value):
+    return "color: green" if value > 0 else "color: red"
 
 
 def display_current_holdings(corrected_trades):
@@ -353,9 +390,15 @@ def display_current_holdings(corrected_trades):
     current_holdings["weight_pct"] = (
         current_holdings["current_value"] / current_holdings["current_value"].sum()
     ) * 100
+    current_holdings["profit"] = current_holdings["profit"].map("{:.2f}".format)
 
+    # profit is $1,123
+    styled_current_holdings = current_holdings.style.map(
+        lambda x: "color:red" if float(x) < 0 else "color:green",
+        subset="profit",
+    )
     st.dataframe(
-        current_holdings,
+        styled_current_holdings,
         use_container_width=True,
         column_config=COLUMUMN_CONFIG,
     )
@@ -366,7 +409,7 @@ def has_sold_more_units_than_bought(sub_df):
     total_buys = sum(
         p["units"]
         for idx, p in sub_df.iterrows()
-        if p["action"] == "Buy" or p["action"] == "DRP" or p["action"] == "SPP"
+        if EFFECTIVE_ACTON[p["action"]] == "Buy"
     )
     total_sells = sum(
         p["units"] for idx, p in sub_df.iterrows() if p["action"] == "Sell"
@@ -381,6 +424,7 @@ def has_missing_price_data(sub_df):
 
 def display_invalid_holdings(trades) -> None:
     """Validate trades"""
+    trades = trades[trades["ignore"] == False]
     # make sure there are enough buys to cover all sells
     for code, sub_df in trades.groupby("code"):
         error_messages = []
@@ -404,70 +448,103 @@ def display_invalid_holdings(trades) -> None:
             )
 
 
+def display_editable_trade_table(trades):
+    codes = trades["code"].unique().tolist()
+    selected_codes = st.multiselect("Select holdings to include", codes, codes)
+    trades = trades[trades["code"].isin(selected_codes)]
+    trades = st.data_editor(
+        to_editable_trades(trades),
+        num_rows="dynamic",
+        hide_index=True,
+        use_container_width=True,
+        column_config=COLUMUMN_CONFIG,
+        column_order=[
+            "date",
+            "action",
+            "code",
+            "units",
+            "avg_price",
+            "brokerage",
+            "source",
+            "ignore",
+        ],
+    )
+    return trades
+
+
 def to_editable_trades(trades):
     """Convert trades to editable format"""
     trades["ignore"] = False
     trades = trades.sort_values(by=["code", "date", "avg_price"], ascending=True)
+    trades = trades.reset_index(drop=True)
     return trades
 
 
-# tax calculations
+def display_import_options():
+    """Display import options"""
+    trades = pd.DataFrame(columns=NORMALISED_COLUMNS)
+    st.subheader("Previous export")
+    prev_report = st.file_uploader(
+        "From the last time you used this tool",
+        type=["csv"],
+        key="prev",
+    )
+    if prev_report:
+        movement = parse_csv(prev_report)
+        trades = pd.concat([trades, movement], ignore_index=True)
 
+    st.subheader("Selfwealth AUD")
+    sw_report = st.file_uploader(
+        "Trading Account -> Movements -> Set your time period -> Export X Rows -> As CSV",
+        type=["csv"],
+        key="sw",
+    )
+    if sw_report:
+        movement = parse_selfwealth_csv(sw_report, currency="AUD")
+        trades = pd.concat([trades, movement], ignore_index=True)
 
-# handle CGT events that have already been reported to ATO
+    st.subheader("Selfwealth USD")
+    sw_report = st.file_uploader(
+        "Trading Account -> Movements -> Set your time period -> Export X Rows -> As CSV",
+        type=["csv"],
+        key="sw-usd",
+    )
+    if sw_report:
+        movement = parse_selfwealth_csv(sw_report, currency="USD")
+        trades = pd.concat([trades, movement], ignore_index=True)
+
+    st.subheader("Commsec")
+    cba_report = st.file_uploader(
+        "Portfolio -> Accounts -> Transactions -> Set your From and To dates -> Downloads -> CSV",
+        type=["csv"],
+        key="cba",
+    )
+    if cba_report:
+        movement = parse_commsec_csv(cba_report)
+        trades = pd.concat([trades, movement], ignore_index=True)
+    st.dataframe(
+        trades,
+        use_container_width=True,
+        column_config=COLUMUMN_CONFIG,
+        column_order=[
+            "date",
+            "action",
+            "code",
+            "units",
+            "avg_price",
+            "brokerage",
+            "source",
+        ],
+    )
+    return trades
+
 
 st.title("Trade Tracker")
 
-trades = pd.DataFrame(columns=NORMALISED_COLUMNS)
 
 # file upload CSV
 st.header("1. Upload reports")
-
-st.subheader("Previous export")
-prev_report = st.file_uploader(
-    "From the last time you used this tool",
-    type=["csv"],
-    key="prev",
-)
-if prev_report:
-    movement = parse_csv(prev_report)
-    trades = pd.concat([trades, movement], ignore_index=True)
-
-st.subheader("Selfwealth AUD")
-sw_report = st.file_uploader(
-    "Trading Account -> Movements -> Set your time period -> Export X Rows -> As CSV",
-    type=["csv"],
-    key="sw",
-)
-if sw_report:
-    movement = parse_selfwealth_csv(sw_report, currency="AUD")
-    trades = pd.concat([trades, movement], ignore_index=True)
-
-st.subheader("Selfwealth USD")
-sw_report = st.file_uploader(
-    "Trading Account -> Movements -> Set your time period -> Export X Rows -> As CSV",
-    type=["csv"],
-    key="sw-usd",
-)
-if sw_report:
-    movement = parse_selfwealth_csv(sw_report, currency="USD")
-    trades = pd.concat([trades, movement], ignore_index=True)
-
-st.subheader("Commsec")
-cba_report = st.file_uploader(
-    "Portfolio -> Accounts -> Transactions -> Set your From and To dates -> Downloads -> CSV",
-    type=["csv"],
-    key="cba",
-)
-if cba_report:
-    movement = parse_commsec_csv(cba_report)
-    trades = pd.concat([trades, movement], ignore_index=True)
-
-
-st.session_state["original_trades"] = trades
-st.dataframe(trades, use_container_width=True, column_config=COLUMUMN_CONFIG)
-
-
+trades = display_import_options()
 st.markdown("---")
 
 
@@ -484,37 +561,35 @@ st.write(
      It may be easier for you to download the consolidated sheet and resolve the below issues in a sheets editor like excel or google sheets before uploading again for the reports
     """,
 )
-
-codes = trades["code"].unique().tolist()
-selected_codes = st.multiselect("Select holdings to include", codes, codes)
-trades = trades[trades["code"].isin(selected_codes)]
-trades = trades.reset_index(drop=True)
-
-trades = st.data_editor(
-    to_editable_trades(trades),
-    num_rows="dynamic",
-    hide_index=True,
-    use_container_width=True,
-    column_config=COLUMUMN_CONFIG,
-)
-
-
-corrected_trades = trades[trades["ignore"] == False]
+# show an editable table
+corrected_trades = display_editable_trade_table(trades)
 # Highlight missing data
 display_invalid_holdings(corrected_trades)
-
-
 st.markdown("---")
 
 
 st.header("3. Reports")
+st.header("Performance Report")
+holdings_by_year = pd.DataFrame(columns=["FY", "holdings"])
+for year in sorted(corrected_trades["FY"].unique().tolist(), reverse=True):
+    trades_before_year = corrected_trades[corrected_trades["FY"] < year]
+    holdings = find_current_holdings(trades_before_year)
+    holdings_by_year = pd.concat(
+        [
+            holdings_by_year,
+            pd.DataFrame.from_records(
+                [
+                    {
+                        "FY": str(year),
+                        "holdings": float("{:.2f}".format(sum(holdings["total_cost"]))),
+                    },
+                ],
+            ),
+        ],
+    )
+st.area_chart(holdings_by_year, x="FY", y="holdings")
 
 st.header("Portfolio Summary")
 display_current_holdings(corrected_trades)
-
-
 st.header("FY Capital Gains")
-display_capital_gains(
-    trades,
-    selected_codes=selected_codes,
-)
+display_capital_gains(corrected_trades)

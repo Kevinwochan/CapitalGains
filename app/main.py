@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from aus import financial_year
+from aus import financial_year, nearest_business_day
 
 st.set_page_config(
     page_title="Trade Tracker",
@@ -177,14 +177,14 @@ def calculate_capital_gains(trades_df):
     """Calculate capital gains by taking the highest possible buy parcel for each trade and matching it with the highest possible sell parcel."""
     if trades_df.empty:
         return trades_df
-
+    trades_df = trades_df.sort_values(by=["code", "date", "action"])
     capital_gain_events = []
     # Progressively making these pairs per year ensures the remaining buy parcels can still be used for the next year
     for code, trades_on_code in trades_df.groupby("code"):
         [buy_parcels, sell_parcels] = find_buy_sell_parcels(trades_on_code)
 
-        # most recent sells first
-        sell_parcels.sort(key=lambda x: x["date"], reverse=True)
+        # oldest sells first
+        sell_parcels.sort(key=lambda x: x["date"])
         # expensive buys first
         buy_parcels.sort(key=lambda x: x["avg_price"], reverse=True)
 
@@ -200,7 +200,6 @@ def calculate_capital_gains(trades_df):
                 ),
                 sell_parcel["date"],
             )
-
             cgt_event = [sell_parcel]
             for buy_parcel in discounted_buy_parcels:
                 units_sold = min(units_remaining, buy_parcel["units"])
@@ -212,7 +211,7 @@ def calculate_capital_gains(trades_df):
 
                 if units_remaining == 0:
                     break
-            cgt_event.sort(key=lambda x: x["date"])
+            cgt_event.sort(key=lambda x: x["action"])
             capital_gain_events.append(
                 {
                     "code": code,
@@ -234,7 +233,6 @@ def display_capital_gains(
         cgt_events_in_year = list(filter(lambda x: x["FY"] == year, cgt_events))
         if not cgt_events_in_year:
             continue
-
         year_gain = sum(
             [
                 sum(
@@ -249,18 +247,17 @@ def display_capital_gains(
             ],
         )
         holdings = find_current_holdings(trades_df[trades_df["FY"] < year])
-        if holdings.empty:
-            continue
-        holding_sum = holdings["total_cost"].sum()
+        holding_sum = (
+            holdings["total_cost"].sum() if holdings["total_cost"].sum() > 0 else 1
+        )
         if year_gain > 0:
             st.markdown(
                 f"### {year}: :green[{year_gain:,.2f} (+{(year_gain/holding_sum*100):,.2f}%)]",
             )
         else:
             st.markdown(
-                f"{year}: :red[{year_gain:,.2f} (-{(year_gain/holding_sum*100):,.2f} %)]",
+                f"### {year}: :red[{year_gain:,.2f} ({(year_gain/holding_sum*100):,.2f} %)]",
             )
-
         for cgt_event in cgt_events_in_year:
             st.dataframe(
                 cgt_event["trades"],
@@ -282,14 +279,6 @@ def display_capital_gains(
                 hide_index=True,
             )
 
-            capital_gain = sum(
-                [
-                    -(x["avg_price"] * x["units"])
-                    if EFFECTIVE_ACTON[x["action"]] == "Buy"
-                    else (x["avg_price"] * x["units"])
-                    for x in cgt_event["trades"]
-                ],
-            )
             total_cost = sum(
                 [
                     x["avg_price"] * x["units"]
@@ -297,15 +286,91 @@ def display_capital_gains(
                     if EFFECTIVE_ACTON[x["action"]] == "Buy"
                 ],
             )
-
+            sold_value = sum(
+                [
+                    (x["avg_price"] * x["units"])
+                    for x in cgt_event["trades"]
+                    if EFFECTIVE_ACTON[x["action"]] == "Sell"
+                ],
+            )
+            capital_gain = sold_value - total_cost
             if capital_gain > 0:
                 st.markdown(
                     f":green[+{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%) ]",
                 )
             else:
                 st.markdown(
-                    f":red[-{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%)]",
+                    f":red[{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%)]",
                 )
+
+
+def calculate_new_holdings(
+    trade,
+    previous_holdings=None,
+):
+    """Takes a holdings summary and applies the trade deltas to calculate a summary of the new position"""
+    if previous_holdings is None:
+        previous_holdings = pd.DataFrame(
+            columns=["code", "units", "total_cost", "avg_price"],
+        )
+
+    code = trade["code"]
+    units = (
+        0
+        if previous_holdings.loc[
+            previous_holdings["code"] == code,
+            "units",
+        ].empty
+        else previous_holdings.loc[
+            previous_holdings["code"] == code,
+            "units",
+        ].sum()
+    )
+
+    total_cost = (
+        0
+        if previous_holdings.loc[
+            previous_holdings["code"] == code,
+            "total_cost",
+        ].empty
+        else previous_holdings.loc[
+            previous_holdings["code"] == code,
+            "total_cost",
+        ].sum()
+    )
+
+    if EFFECTIVE_ACTON[trade["action"]] == "Buy":
+        units += trade["units"]
+        total_cost += trade["avg_price"] * trade["units"]
+    elif trade["action"] == "Sell":
+        total_cost -= trade["avg_price"] * trade["units"]
+        units -= trade["units"]
+
+    if units > 0:
+        holding_summmary = pd.DataFrame.from_records(
+            data=[
+                {
+                    "code": code,
+                    "units": units,
+                    "avg_price": total_cost / units,
+                    "total_cost": total_cost,
+                },
+            ],
+            columns=[
+                "code",
+                "units",
+                "avg_price",
+                "total_cost",
+            ],
+        )
+        new_holdings = pd.concat(
+            [previous_holdings[previous_holdings["code"] != code], holding_summmary],
+            ignore_index=True,
+        )
+    else:
+        new_holdings = previous_holdings[previous_holdings["code"] != code]
+
+    return new_holdings
 
 
 def find_current_holdings(trades):
@@ -323,7 +388,8 @@ def find_current_holdings(trades):
             elif row["action"] == "Sell":
                 total_cost -= row["avg_price"] * row["units"]
                 units -= row["units"]
-
+            if units == 0:
+                total_cost = 0
         if units > 0:
             holding_summmary = pd.DataFrame.from_records(
                 data=[
@@ -379,14 +445,22 @@ def display_current_holdings(corrected_trades):
     if current_holdings.empty:
         st.write("No current holdings found")
         return
-    st.write(
-        f"Portfolio value: ${current_holdings['current_value'].sum():,.2f}",
+    st.subheader(
+        f"Market value: ${current_holdings['current_value'].sum():,.2f}",
     )
-    st.write(f"Total cost: ${current_holdings['total_cost'].sum():,.2f}")
-    st.write(
-        f"Total Profit: ${current_holdings['current_value'].sum() - current_holdings['total_cost'].sum():,.2f}",
-    )
+    st.subheader(f"Cost: ${current_holdings['total_cost'].sum():,.2f}")
 
+    profit = (
+        current_holdings["current_value"].sum() - current_holdings["total_cost"].sum()
+    )
+    if profit > 0:
+        st.markdown(
+            f"### Unrealised profit: {profit:,.2f} (:green[+{(profit/current_holdings["current_value"].sum()*100):,.2f}%])",
+        )
+    else:
+        st.markdown(
+            f"### Unrealised profit: {profit:,.2f} (:red[({(profit/current_holdings["current_value"].sum()*100):,.2f} %])",
+        )
     current_holdings["weight_pct"] = (
         current_holdings["current_value"] / current_holdings["current_value"].sum()
     ) * 100
@@ -444,6 +518,16 @@ def display_invalid_holdings(trades) -> None:
             st.dataframe(
                 sub_df,
                 use_container_width=True,
+                column_order=[
+                    "code",
+                    "action",
+                    "units",
+                    "avg_price",
+                    "date",
+                    "reference",
+                    "source",
+                ],
+                hide_index=True,
                 column_config=COLUMUMN_CONFIG,
             )
 
@@ -459,12 +543,12 @@ def display_editable_trade_table(trades):
         use_container_width=True,
         column_config=COLUMUMN_CONFIG,
         column_order=[
-            "date",
-            "action",
             "code",
+            "action",
             "units",
             "avg_price",
             "brokerage",
+            "date",
             "source",
             "ignore",
         ],
@@ -539,6 +623,12 @@ def display_import_options():
     return trades
 
 
+def daterange(start_date, end_date):
+    days = int((end_date - start_date).days)
+    for n in range(days):
+        yield start_date + pd.Timedelta(n)
+
+
 st.title("Trade Tracker")
 
 
@@ -569,25 +659,119 @@ st.markdown("---")
 
 
 st.header("3. Reports")
-st.header("Performance Report")
-holdings_by_year = pd.DataFrame(columns=["FY", "holdings"])
-for year in sorted(corrected_trades["FY"].unique().tolist(), reverse=True):
-    trades_before_year = corrected_trades[corrected_trades["FY"] < year]
-    holdings = find_current_holdings(trades_before_year)
-    holdings_by_year = pd.concat(
-        [
-            holdings_by_year,
-            pd.DataFrame.from_records(
-                [
-                    {
-                        "FY": str(year),
-                        "holdings": float("{:.2f}".format(sum(holdings["total_cost"]))),
-                    },
-                ],
-            ),
-        ],
+st.header("Historical Portfolio")
+st.write(
+    "Historical value from yahoo finance",
+)
+report_type = st.selectbox("Select report type", ["By Financial Year", "By Date"])
+
+codes = corrected_trades["code"].unique()
+historical_market_data = yf.download(
+    " ".join(codes),
+    start=corrected_trades["date"].min(),
+    end=pd.Timestamp.now(),
+)
+historical_market_data.fillna(method="bfill", inplace=True)
+if report_type == "By Financial Year":
+    holdings_by_year = pd.DataFrame(columns=["FY", "cost"])
+    for year in range(
+        corrected_trades["FY"].min(),
+        financial_year(pd.Timestamp.now()) + 1,
+    ):
+        trades_before_year = corrected_trades[corrected_trades["FY"] < year]
+        holdings = find_current_holdings(trades_before_year)
+        market_value = 0
+        cost = 0
+        for _, holding in holdings.iterrows():
+            day = nearest_business_day(pd.Timestamp(year=year, month=6, day=30))
+            cost += holding["units"] * holding["avg_price"]
+            market_unit_price = historical_market_data.loc[day, "Close"][
+                holding["code"]
+            ]
+            if not pd.isna(market_unit_price):
+                market_value += (
+                    holding["units"]
+                    * historical_market_data.loc[day, "Close"][holding["code"]]
+                )
+            else:
+                market_value += cost
+        holdings_by_year = pd.concat(
+            [
+                holdings_by_year,
+                pd.DataFrame.from_records(
+                    [
+                        {
+                            "FY": str(year),
+                            "cost": float(
+                                "{:.2f}".format(sum(holdings["total_cost"])),
+                            ),
+                            "value": market_value,
+                        },
+                    ],
+                ),
+            ],
+        )
+    st.area_chart(
+        holdings_by_year,
+        x="FY",
+        y=["value", "cost"],
+        stack=False,
+        use_container_width=True,
     )
-st.area_chart(holdings_by_year, x="FY", y="holdings")
+else:
+    dates = corrected_trades["date"].unique()
+    new_index = pd.date_range(dates.min(), dates.max(), freq="B")
+
+    holdings_by_date = pd.DataFrame(
+        columns=["date", "cost"],
+    )
+
+    holdings = pd.DataFrame(columns=["code", "units", "total_cost", "avg_price"])
+    corrected_trades.sort_values("date", inplace=True)
+    # for every day traded
+    for date, trade_window in corrected_trades.groupby("date"):
+        # find the resulting holdings at the end of the day
+        for _, trade in trade_window.iterrows():
+            holdings = calculate_new_holdings(
+                trade,
+                previous_holdings=holdings,
+            )
+        market_value = 0
+        cost = 0
+        for _, holding in holdings.iterrows():
+            if holding["units"] == 0:
+                continue
+            cost += holding["units"] * holding["avg_price"]
+            market_unit_price = historical_market_data.loc[date, "Close"][
+                holding["code"]
+            ]
+            if not pd.isna(market_unit_price):
+                market_value += holding["units"] * market_unit_price
+            else:
+                market_value += cost
+
+        holdings_by_date = pd.concat(
+            [
+                holdings_by_date,
+                pd.DataFrame.from_records(
+                    [
+                        {
+                            "date": date,
+                            "cost": cost,
+                            "value": market_value,
+                        },
+                    ],
+                ),
+            ],
+        )
+    holdings_by_date = holdings_by_date.set_index("date", drop=True)
+    holdings_by_date.reindex(new_index, method="bfill")
+    holdings_by_date["cost"] = holdings_by_date["cost"].apply(
+        lambda x: float(
+            f"{x:.2f}",
+        ),
+    )
+    st.area_chart(holdings_by_date, stack=False)
 
 st.header("Portfolio Summary")
 display_current_holdings(corrected_trades)

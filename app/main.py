@@ -55,7 +55,8 @@ def parse_csv(csv):
             "avg_price": float,
         },
     )
-    trades["source"].fillna("Manual")
+    trades["source"] = trades["source"].fillna("Manual")
+    trades["brokerage"] = trades["brokerage"].fillna(0)
     trades["date"] = pd.to_datetime(trades["date"])
     trades["FY"] = trades["date"].apply(lambda x: financial_year(x))
     return trades
@@ -148,6 +149,8 @@ def find_buy_sell_parcels(trades):
     buy_parcels = []
     sell_parcels = []
     for _, row in trades.iterrows():
+        if pd.isna(row["consideration"]):
+            row["consideration"] = row["avg_price"] * row["units"]
         if EFFECTIVE_ACTON[row["action"]] == "Buy":
             buy_parcels.append(row)
         elif row["action"] == "Sell":
@@ -156,18 +159,20 @@ def find_buy_sell_parcels(trades):
     return buy_parcels, sell_parcels
 
 
-def apply_cgt_discount(buy_parcels, date):
+def apply_cgt_discount_bias(buy_parcels, date):
+    """Does not actually apply a cgt discount, but ensure cgt discounted parcels are prioritised"""
     discounted_buy_parcels = []
     for buy in buy_parcels:
-        buy["contract_price"] = buy["avg_price"]
         if buy["date"] - date > pd.Timedelta(
             days=365,
         ):
-            buy["avg_price"] = buy["avg_price"] / 2
+            buy["bias_price"] = buy["avg_price"] * 2
+        else:
+            buy["bias_price"] = buy["avg_price"]
         discounted_buy_parcels.append(buy)
 
     discounted_buy_parcels.sort(
-        key=lambda x: x["avg_price"],
+        key=lambda x: x["bias_price"],
         reverse=True,
     )
     return discounted_buy_parcels
@@ -185,13 +190,10 @@ def calculate_capital_gains(trades_df):
 
         # oldest sells first
         sell_parcels.sort(key=lambda x: x["date"])
-        # expensive buys first
-        buy_parcels.sort(key=lambda x: x["avg_price"], reverse=True)
-
         for sell_parcel in sell_parcels:
             units_remaining = sell_parcel["units"]
             # filter out invalid buy parcels and apply the cgt discount
-            discounted_buy_parcels = apply_cgt_discount(
+            discounted_buy_parcels = apply_cgt_discount_bias(
                 list(
                     filter(
                         lambda x: x["date"] <= sell_parcel["date"] and x["units"] > 0,
@@ -201,6 +203,7 @@ def calculate_capital_gains(trades_df):
                 sell_parcel["date"],
             )
             cgt_event = [sell_parcel]
+            taxable_capital_gain = 0
             for buy_parcel in discounted_buy_parcels:
                 units_sold = min(units_remaining, buy_parcel["units"])
                 units_remaining -= units_sold
@@ -208,15 +211,36 @@ def calculate_capital_gains(trades_df):
                 buy["units"] = units_sold
                 cgt_event.append(buy)
                 buy_parcel["units"] -= units_sold
-
+                capital_proceeds = units_sold * sell_parcel["avg_price"]
+                cost_base = units_sold * buy_parcel["avg_price"]
+                incidental_costs = buy_parcel["brokerage"] + sell_parcel["brokerage"]
+                # https://www.ato.gov.au/individuals-and-families/investments-and-assets/capital-gains-tax/calculating-your-cgt
+                capital_gain = capital_proceeds - cost_base - incidental_costs
+                if (
+                    sell_parcel["date"] - buy_parcel["date"]
+                    > pd.Timedelta(
+                        days=365,
+                    )
+                    and capital_gain > 0
+                ):
+                    cgt_discount = capital_gain / 2
+                    taxable_capital_gain += (
+                        capital_proceeds - cost_base - incidental_costs - cgt_discount
+                    )
+                else:
+                    taxable_capital_gain += (
+                        capital_proceeds - cost_base - incidental_costs
+                    )
                 if units_remaining == 0:
                     break
+
             cgt_event.sort(key=lambda x: x["action"])
             capital_gain_events.append(
                 {
                     "code": code,
                     "trades": cgt_event,
                     "FY": sell_parcel["FY"],
+                    "taxable_gain": taxable_capital_gain,
                 },
             )
 
@@ -238,7 +262,7 @@ def display_capital_gains(
                 sum(
                     [
                         -(x["avg_price"] * x["units"])
-                        if x["action"] == "Buy"
+                        if EFFECTIVE_ACTON[x["action"]] == "Buy"
                         else (x["avg_price"] * x["units"])
                         for x in cgt_event["trades"]
                     ],
@@ -273,12 +297,22 @@ def display_capital_gains(
                     "units",
                     "avg_price",
                     "consideration",
+                    "brokerage",
                     "reference",
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
-
+            cost_of_acquisition = sum(
+                [
+                    x["brokerage"]
+                    for x in cgt_event["trades"]
+                    if EFFECTIVE_ACTON[x["action"]] == "Buy"
+                ],
+            )
+            brokerage_costs = sum(
+                [x["brokerage"] for x in cgt_event["trades"]],
+            )
             total_cost = sum(
                 [
                     x["avg_price"] * x["units"]
@@ -293,9 +327,7 @@ def display_capital_gains(
                     if EFFECTIVE_ACTON[x["action"]] == "Sell"
                 ],
             )
-            capital_gain = sold_value - total_cost
-            if total_cost == 0:
-                total_cost = 1
+            capital_gain = sold_value - total_cost - brokerage_costs
             if capital_gain > 0:
                 st.markdown(
                     f":green[+{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%) ]",
@@ -304,6 +336,10 @@ def display_capital_gains(
                 st.markdown(
                     f":red[{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%)]",
                 )
+
+            st.markdown(
+                f"Taxable capital gain: {cgt_event['taxable_gain']:,.2f}",
+            )
 
 
 def calculate_new_holdings(
@@ -468,6 +504,7 @@ def display_current_holdings(corrected_trades):
     ) * 100
     current_holdings["profit"] = current_holdings["profit"].map("{:.2f}".format)
 
+    current_holdings.sort_values(by="weight_pct", ascending=False, inplace=True)
     # profit is $1,123
     styled_current_holdings = current_holdings.style.map(
         lambda x: "color:red" if float(x) < 0 else "color:green",
@@ -797,3 +834,5 @@ st.header("Portfolio Summary")
 display_current_holdings(corrected_trades)
 st.header("FY Capital Gains")
 display_capital_gains(corrected_trades)
+
+st.header("Rebalancing recommendations")

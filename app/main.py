@@ -33,6 +33,14 @@ COLUMUMN_CONFIG = {
         "Weight (%)",
         format="%.1f",
     ),
+    "current_value": st.column_config.NumberColumn(
+        "Current Value",
+        format="$,.2f",
+    ),
+    "current_price": st.column_config.NumberColumn(
+        "Current Price",
+        format="$,.2f",
+    ),
 }
 
 ACTIONS = ["Buy", "Sell", "DRP", "SPP"]
@@ -59,6 +67,9 @@ def parse_csv(csv):
     trades["brokerage"] = trades["brokerage"].fillna(0)
     trades["date"] = pd.to_datetime(trades["date"])
     trades["FY"] = trades["date"].apply(lambda x: financial_year(x))
+    trades["code"] = trades["code"].apply(
+        lambda x: x if x.endswith(".AX") else x + ".AX"
+    )
     return trades
 
 
@@ -457,7 +468,7 @@ def get_current_value(holdings):
     if holdings.empty:
         return holdings
     holdings["current_price"] = holdings.apply(
-        lambda x: yf.Ticker(x["code"]).info.get("previousClose", 0),
+        lambda x: yf.Ticker(x["code"]).info.get("previousClose", None),
         axis=1,
     )
     holdings["current_value"] = holdings["current_price"] * holdings["units"]
@@ -493,11 +504,11 @@ def display_current_holdings(corrected_trades):
     )
     if profit > 0:
         st.markdown(
-            f"### Unrealised profit: {profit:,.2f} (:green[+{(profit/current_holdings["current_value"].sum()*100):,.2f}%])",
+            f"### Unrealised profit: :green[{profit:,.2f} (+{(profit/current_holdings["current_value"].sum()*100):,.2f}%)]",
         )
     else:
         st.markdown(
-            f"### Unrealised profit: {profit:,.2f} (:red[({(profit/current_holdings["current_value"].sum()*100):,.2f} %])",
+            f"### Unrealised profit: :red[{profit:,.2f} ({(profit/current_holdings["current_value"].sum()*100):,.2f} %)]",
         )
     current_holdings["weight_pct"] = (
         current_holdings["current_value"] / current_holdings["current_value"].sum()
@@ -660,6 +671,8 @@ def daterange(start_date, end_date):
 
 def get_market_price(historical_market_data, day, code):
     """Required when only one ticker is provided to yfinance.download"""
+    if day not in historical_market_data.index:
+        return pd.NA
     indexes = historical_market_data.loc[day].index
     if code in indexes:
         return historical_market_data.loc[day][code]["Close"]
@@ -758,9 +771,11 @@ def display_historical_portfolio(corrected_trades):
                 if holding["units"] == 0:
                     continue
                 cost += holding["units"] * holding["avg_price"]
-                market_unit_price = historical_market_data.loc[date, "Close"][
-                    holding["code"]
-                ]
+                market_unit_price = get_market_price(
+                    historical_market_data,
+                    date,
+                    holding["code"],
+                )
                 if not pd.isna(market_unit_price):
                     market_value += holding["units"] * market_unit_price
                 else:

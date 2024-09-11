@@ -519,11 +519,11 @@ def display_invalid_holdings(trades) -> None:
                 sub_df,
                 use_container_width=True,
                 column_order=[
+                    "date",
                     "code",
                     "action",
                     "units",
                     "avg_price",
-                    "date",
                     "reference",
                     "source",
                 ],

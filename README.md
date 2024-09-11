@@ -1,8 +1,6 @@
 # CapitalGains
 
-
-`pipenv install -r requirements.txt`
-`streamlit run main.py`
+## Features
 # Import CSVs from brokers
 ![alt text](image.png)
 
@@ -11,3 +9,7 @@
 
 # Reports
 ![alt text](image-2.png)
+
+## Running Locally
+`pipenv install -r requirements.txt`
+`streamlit run main.py`

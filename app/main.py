@@ -587,16 +587,6 @@ def display_import_options():
         movement = parse_selfwealth_csv(sw_report, currency="AUD")
         trades = pd.concat([trades, movement], ignore_index=True)
 
-    st.subheader("Selfwealth USD")
-    sw_report = st.file_uploader(
-        "Trading Account -> Movements -> Set your time period -> Export X Rows -> As CSV",
-        type=["csv"],
-        key="sw-usd",
-    )
-    if sw_report:
-        movement = parse_selfwealth_csv(sw_report, currency="USD")
-        trades = pd.concat([trades, movement], ignore_index=True)
-
     st.subheader("Commsec")
     cba_report = st.file_uploader(
         "Portfolio -> Accounts -> Transactions -> Set your From and To dates -> Downloads -> CSV",

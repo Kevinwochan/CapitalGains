@@ -294,6 +294,8 @@ def display_capital_gains(
                 ],
             )
             capital_gain = sold_value - total_cost
+            if total_cost == 0:
+                total_cost = 1
             if capital_gain > 0:
                 st.markdown(
                     f":green[+{capital_gain:,.2f} ({capital_gain/total_cost*100:.2f}%) ]",
@@ -419,7 +421,7 @@ def get_current_value(holdings):
     if holdings.empty:
         return holdings
     holdings["current_price"] = holdings.apply(
-        lambda x: yf.Ticker(x["code"]).info["previousClose"],
+        lambda x: yf.Ticker(x["code"]).info.get("previousClose", 0),
         axis=1,
     )
     holdings["current_value"] = holdings["current_price"] * holdings["units"]
@@ -443,7 +445,7 @@ def display_current_holdings(corrected_trades):
     current_holdings = get_current_value(current_holdings)
 
     if current_holdings.empty:
-        st.write("No current holdings found")
+        st.info("No current holdings found")
         return
     st.subheader(
         f"Market value: ${current_holdings['current_value'].sum():,.2f}",
@@ -619,6 +621,138 @@ def daterange(start_date, end_date):
         yield start_date + pd.Timedelta(n)
 
 
+def get_market_price(historical_market_data, day, code):
+    """Required when only one ticker is provided to yfinance.download"""
+    indexes = historical_market_data.loc[day].index
+    if code in indexes:
+        return historical_market_data.loc[day][code]["Close"]
+    return historical_market_data.loc[day]["Close"]
+
+
+def display_historical_portfolio(corrected_trades):
+    if corrected_trades.empty:
+        st.info("Please upload a transactions to view your historical portfolio")
+        return
+
+    report_type = st.selectbox("Select report type", ["By Financial Year", "By Date"])
+    codes = corrected_trades["code"].unique()
+    historical_market_data = pd.DataFrame()
+    try:
+        historical_market_data = yf.download(
+            " ".join(codes),
+            start=corrected_trades["date"].min(),
+            end=pd.Timestamp.now(),
+            group_by="ticker",
+        )
+        historical_market_data.fillna(method="bfill", inplace=True)
+    except Exception as e:
+        st.error(e)
+        historical_market_data = pd.DataFrame()
+
+    if report_type == "By Financial Year":
+        holdings_by_year = pd.DataFrame(columns=["FY", "cost"])
+        starting_year = corrected_trades["FY"].min()
+        if pd.isna(starting_year):
+            starting_year = financial_year(pd.Timestamp.now()) - 1
+        for year in range(
+            starting_year,
+            financial_year(pd.Timestamp.now()) + 1,
+        ):
+            trades_before_year = corrected_trades[corrected_trades["FY"] < year]
+            holdings = find_current_holdings(trades_before_year)
+            market_value = 0
+            cost = 0
+            for _, holding in holdings.iterrows():
+                day = nearest_business_day(pd.Timestamp(year=year, month=6, day=30))
+                cost += holding["units"] * holding["avg_price"]
+                market_unit_price = get_market_price(
+                    historical_market_data,
+                    day,
+                    holding["code"],
+                )
+                if not pd.isna(market_unit_price):
+                    market_value += holding["units"] * market_unit_price
+                else:
+                    market_value += cost
+            holdings_by_year = pd.concat(
+                [
+                    holdings_by_year,
+                    pd.DataFrame.from_records(
+                        [
+                            {
+                                "FY": str(year),
+                                "cost": float(
+                                    "{:.2f}".format(sum(holdings["total_cost"])),
+                                ),
+                                "value": market_value,
+                            },
+                        ],
+                    ),
+                ],
+            )
+        st.area_chart(
+            holdings_by_year,
+            x="FY",
+            y=["value", "cost"],
+            stack=False,
+            use_container_width=True,
+        )
+    else:
+        dates = corrected_trades["date"].unique()
+        new_index = pd.date_range(dates.min(), dates.max(), freq="B")
+
+        holdings_by_date = pd.DataFrame(
+            columns=["date", "cost"],
+        )
+
+        holdings = pd.DataFrame(columns=["code", "units", "total_cost", "avg_price"])
+        corrected_trades.sort_values("date", inplace=True)
+        # for every day traded
+        for date, trade_window in corrected_trades.groupby("date"):
+            # find the resulting holdings at the end of the day
+            for _, trade in trade_window.iterrows():
+                holdings = calculate_new_holdings(
+                    trade,
+                    previous_holdings=holdings,
+                )
+            market_value = 0
+            cost = 0
+            for _, holding in holdings.iterrows():
+                if holding["units"] == 0:
+                    continue
+                cost += holding["units"] * holding["avg_price"]
+                market_unit_price = historical_market_data.loc[date, "Close"][
+                    holding["code"]
+                ]
+                if not pd.isna(market_unit_price):
+                    market_value += holding["units"] * market_unit_price
+                else:
+                    market_value += cost
+
+            holdings_by_date = pd.concat(
+                [
+                    holdings_by_date,
+                    pd.DataFrame.from_records(
+                        [
+                            {
+                                "date": date,
+                                "cost": cost,
+                                "value": market_value,
+                            },
+                        ],
+                    ),
+                ],
+            )
+        holdings_by_date = holdings_by_date.set_index("date", drop=True)
+        holdings_by_date.reindex(new_index, method="bfill")
+        holdings_by_date["cost"] = holdings_by_date["cost"].apply(
+            lambda x: float(
+                f"{x:.2f}",
+            ),
+        )
+        st.area_chart(holdings_by_date, stack=False)
+
+
 st.title("Trade Tracker")
 
 
@@ -632,14 +766,17 @@ st.header("2. Consolidate, filter and correct data")
 st.write(
     """
     Here you might want to:
-     - add data that might be missing 
+     - add data that might be missing
      - update DRP distributions with a Buy price
      - filter out closed positions
-     - remove transfererred between accounts
+     - remove transfers between accounts
      - update buy prices that took place before a share split
-
-     It may be easier for you to download the consolidated sheet and resolve the below issues in a sheets editor like excel or google sheets before uploading again for the reports
     """,
+)
+st.image(
+    "images/download.png",
+    caption="You can download the consolidated sheet using the download button",
+    width=300,
 )
 # show an editable table
 corrected_trades = display_editable_trade_table(trades)
@@ -653,115 +790,8 @@ st.header("Historical Portfolio")
 st.write(
     "Historical value from yahoo finance",
 )
-report_type = st.selectbox("Select report type", ["By Financial Year", "By Date"])
 
-codes = corrected_trades["code"].unique()
-historical_market_data = yf.download(
-    " ".join(codes),
-    start=corrected_trades["date"].min(),
-    end=pd.Timestamp.now(),
-)
-historical_market_data.fillna(method="bfill", inplace=True)
-if report_type == "By Financial Year":
-    holdings_by_year = pd.DataFrame(columns=["FY", "cost"])
-    for year in range(
-        corrected_trades["FY"].min(),
-        financial_year(pd.Timestamp.now()) + 1,
-    ):
-        trades_before_year = corrected_trades[corrected_trades["FY"] < year]
-        holdings = find_current_holdings(trades_before_year)
-        market_value = 0
-        cost = 0
-        for _, holding in holdings.iterrows():
-            day = nearest_business_day(pd.Timestamp(year=year, month=6, day=30))
-            cost += holding["units"] * holding["avg_price"]
-            market_unit_price = historical_market_data.loc[day, "Close"][
-                holding["code"]
-            ]
-            if not pd.isna(market_unit_price):
-                market_value += (
-                    holding["units"]
-                    * historical_market_data.loc[day, "Close"][holding["code"]]
-                )
-            else:
-                market_value += cost
-        holdings_by_year = pd.concat(
-            [
-                holdings_by_year,
-                pd.DataFrame.from_records(
-                    [
-                        {
-                            "FY": str(year),
-                            "cost": float(
-                                "{:.2f}".format(sum(holdings["total_cost"])),
-                            ),
-                            "value": market_value,
-                        },
-                    ],
-                ),
-            ],
-        )
-    st.area_chart(
-        holdings_by_year,
-        x="FY",
-        y=["value", "cost"],
-        stack=False,
-        use_container_width=True,
-    )
-else:
-    dates = corrected_trades["date"].unique()
-    new_index = pd.date_range(dates.min(), dates.max(), freq="B")
-
-    holdings_by_date = pd.DataFrame(
-        columns=["date", "cost"],
-    )
-
-    holdings = pd.DataFrame(columns=["code", "units", "total_cost", "avg_price"])
-    corrected_trades.sort_values("date", inplace=True)
-    # for every day traded
-    for date, trade_window in corrected_trades.groupby("date"):
-        # find the resulting holdings at the end of the day
-        for _, trade in trade_window.iterrows():
-            holdings = calculate_new_holdings(
-                trade,
-                previous_holdings=holdings,
-            )
-        market_value = 0
-        cost = 0
-        for _, holding in holdings.iterrows():
-            if holding["units"] == 0:
-                continue
-            cost += holding["units"] * holding["avg_price"]
-            market_unit_price = historical_market_data.loc[date, "Close"][
-                holding["code"]
-            ]
-            if not pd.isna(market_unit_price):
-                market_value += holding["units"] * market_unit_price
-            else:
-                market_value += cost
-
-        holdings_by_date = pd.concat(
-            [
-                holdings_by_date,
-                pd.DataFrame.from_records(
-                    [
-                        {
-                            "date": date,
-                            "cost": cost,
-                            "value": market_value,
-                        },
-                    ],
-                ),
-            ],
-        )
-    holdings_by_date = holdings_by_date.set_index("date", drop=True)
-    holdings_by_date.reindex(new_index, method="bfill")
-    holdings_by_date["cost"] = holdings_by_date["cost"].apply(
-        lambda x: float(
-            f"{x:.2f}",
-        ),
-    )
-    st.area_chart(holdings_by_date, stack=False)
+display_historical_portfolio(corrected_trades)
 
 st.header("Portfolio Summary")
 display_current_holdings(corrected_trades)

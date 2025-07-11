@@ -68,7 +68,7 @@ def parse_csv(csv):
     trades["date"] = pd.to_datetime(trades["date"])
     trades["FY"] = trades["date"].apply(lambda x: financial_year(x))
     trades["code"] = trades["code"].apply(
-        lambda x: x if x.endswith(".AX") else x + ".AX"
+        lambda x: x if x.endswith(".AX") else x + ".AX",
     )
     return trades
 
@@ -144,6 +144,60 @@ def parse_selfwealth_csv(csv, currency="AUD"):
     trades["FY"] = trades["Trade Date"].apply(lambda x: financial_year(x))
     trades.columns = NORMALISED_COLUMNS
     # translate this: 2021-05-28 00:00:00 to a Datetime object
+    return trades
+
+
+def parse_stake_csv(csv, currency="AUD"):
+    """Trade Date	Settlement Date	Symbol	Side	Trade Identifier	Units	Avg. Price	Value	Fees	GST	Total Value	Currency
+    2024-11-01	2024-11-05	VAS - Vanguard Australian Shares Index ETF	Buy	194823564	37	100.39	3714.43	2.73	0.27	3717.43	AUD
+    """
+    trades = pd.read_csv(
+        csv,
+        usecols=[
+            "Trade Date",
+            "Symbol",
+            "Side",
+            "Trade Identifier",
+            "Units",
+            "Avg. Price",
+            "Value",
+            "Fees",
+            "GST",
+            "Total Value",
+            "Currency",
+        ],
+        converters={
+            "Trade Date": lambda x: pd.to_datetime(x, format="%Y-%m-%d"),
+            "Units": int,
+            "Symbol": lambda x: (
+                x.split(" - ")[0] + ".AX" if currency == "AUD" else x.split(" - ")[0]
+            ),
+        },
+    )
+
+    def parse_stake_row(row):
+        """Translate to normalised row."""
+        new_row = [col for col in NORMALISED_COLUMNS]
+        try:
+            new_row[0] = row["Trade Date"]
+            new_row[1] = "Buy" if row["Side"] == "Buy" else "Sell"
+            new_row[2] = row["Trade Identifier"]
+            new_row[3] = row["Symbol"].split(" - ")[0]
+            new_row[4] = row["Units"]
+            new_row[5] = row["Avg. Price"]
+            new_row[6] = row["Value"]
+            new_row[7] = row["Fees"] + row["GST"]
+            new_row[8] = "Stake CSV"
+            new_row[9] = row["Currency"]
+            new_row[10] = financial_year(new_row[0])
+        except:
+            st.error(
+                "Please upload a valid Stake CSV file with the correct format.",
+            )
+        return new_row
+
+    trades = trades.apply(parse_stake_row, axis=1, result_type="expand")
+    trades.columns = NORMALISED_COLUMNS
     return trades
 
 
@@ -272,9 +326,11 @@ def display_capital_gains(
             [
                 sum(
                     [
-                        -(x["avg_price"] * x["units"])
-                        if EFFECTIVE_ACTON[x["action"]] == "Buy"
-                        else (x["avg_price"] * x["units"])
+                        (
+                            -(x["avg_price"] * x["units"])
+                            if EFFECTIVE_ACTON[x["action"]] == "Buy"
+                            else (x["avg_price"] * x["units"])
+                        )
                         for x in cgt_event["trades"]
                     ],
                 )
@@ -646,6 +702,17 @@ def display_import_options():
     if cba_report:
         movement = parse_commsec_csv(cba_report)
         trades = pd.concat([trades, movement], ignore_index=True)
+    st.subheader("Stake")
+    stake_report = st.file_uploader(
+        "Tax & reporting -> Financial year reports -> Open in Excel and save the trade sheet as CSV ",
+        type=["csv"],
+        key="stake",
+    )
+    if stake_report:
+        movement = parse_stake_csv(stake_report)
+        trades = pd.concat([trades, movement], ignore_index=True)
+    return trades
+
     st.dataframe(
         trades,
         use_container_width=True,
@@ -658,9 +725,9 @@ def display_import_options():
             "avg_price",
             "brokerage",
             "source",
+            "reference",
         ],
     )
-    return trades
 
 
 def daterange(start_date, end_date):

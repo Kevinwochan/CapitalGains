@@ -15,9 +15,16 @@ ENV PATH="$PATH:/root/.local/bin"
 
 RUN pipx install uv
 
+# Create virtual environment
+RUN uv venv /app/.venv
+
+# Activate virtual environment by setting PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
 COPY ./app/requirements.txt requirements.txt
 
-RUN uv pip install --system -r requirements.txt
+# Install packages into virtual environment
+RUN uv pip install -r requirements.txt
 
 COPY ./app /app
 
@@ -25,4 +32,4 @@ EXPOSE 8501
 
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
-ENTRYPOINT ["uv", "run", "streamlit", "run", "/app/main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+ENTRYPOINT ["streamlit", "run", "/app/main.py", "--server.port=8501", "--server.address=0.0.0.0"]

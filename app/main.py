@@ -41,6 +41,22 @@ COLUMUMN_CONFIG = {
         "Current Price",
         format="dollar",
     ),
+    "profit": st.column_config.NumberColumn(
+        "Profit",
+        format="dollar",
+    ),
+    "consideration": st.column_config.NumberColumn(
+        "Consideration",
+        format="dollar",
+    ),
+    "brokerage": st.column_config.NumberColumn(
+        "Brokerage",
+        format="dollar",
+    ),
+    "avg_price": st.column_config.NumberColumn(
+        "Avg Price",
+        format="dollar",
+    ),
 }
 
 ACTIONS = ["Buy", "Sell", "DRP", "SPP"]
@@ -352,12 +368,7 @@ def display_capital_gains(
         for cgt_event in cgt_events_in_year:
             st.dataframe(
                 cgt_event["trades"],
-                column_config={
-                    "date": st.column_config.DateColumn("Date"),
-                    "avg_price": st.column_config.NumberColumn(format="dollar"),
-                    "consideration": st.column_config.NumberColumn(format="dollar"),
-                    "brokerage": st.column_config.NumberColumn(format="dollar"),
-                },
+                column_config=COLUMUMN_CONFIG,
                 column_order=[
                     "code",
                     "action",
@@ -863,11 +874,6 @@ def display_historical_portfolio(corrected_trades):
             )
         holdings_by_date = holdings_by_date.set_index("date", drop=True)
         holdings_by_date.reindex(new_index, method="bfill")
-        holdings_by_date["cost"] = holdings_by_date["cost"].apply(
-            lambda x: float(
-                f"{x:.2f}",
-            ),
-        )
         st.area_chart(holdings_by_date, stack=False)
 
 

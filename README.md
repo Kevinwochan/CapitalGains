@@ -15,8 +15,8 @@
 
 ## Running in Docker
 - `docker build -t capitalgains .`
-- `docker run -p 8501:8501 capitalgains`
+- `docker run -v $(pwd)/.cache:/root/.cache -p 8501:8501 capitalgains`
 
 ## Development: Running in Docker Volume
 - `docker build -t capitalgains .`
-- `docker run -v $(pwd)/app:/app -p 8501:8501 capitalgains`
+- `docker run -v $(pwd)/app:/app -v $(pwd)/.cache:/root/.cache -p 8501:8501 capitalgains`

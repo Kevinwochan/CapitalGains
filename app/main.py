@@ -35,11 +35,11 @@ COLUMUMN_CONFIG = {
     ),
     "current_value": st.column_config.NumberColumn(
         "Current Value",
-        format="$,.2f",
+        format="dollar",
     ),
     "current_price": st.column_config.NumberColumn(
         "Current Price",
-        format="$,.2f",
+        format="dollar",
     ),
 }
 
@@ -353,9 +353,10 @@ def display_capital_gains(
             st.dataframe(
                 cgt_event["trades"],
                 column_config={
-                    "date": st.column_config.DateColumn(
-                        "Date",
-                    ),
+                    "date": st.column_config.DateColumn("Date"),
+                    "avg_price": st.column_config.NumberColumn(format="dollar"),
+                    "consideration": st.column_config.NumberColumn(format="dollar"),
+                    "brokerage": st.column_config.NumberColumn(format="dollar"),
                 },
                 column_order=[
                     "code",
@@ -798,9 +799,7 @@ def display_historical_portfolio(corrected_trades):
                         [
                             {
                                 "FY": str(year),
-                                "cost": float(
-                                    "{:.2f}".format(sum(holdings["total_cost"])),
-                                ),
+                                "cost": float(sum(holdings["total_cost"])),
                                 "value": market_value,
                             },
                         ],

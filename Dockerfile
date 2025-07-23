@@ -1,3 +1,26 @@
+<target name="-post-jar">
+  <property name="jarsigner" value="${env.JAVA_HOME}/bin/jarsigner"/>
+  <property name="jsign.jar" value="/path/to/jsign-<version>.jar"/>
+  <property name="signed.jar" value="${project.build.dir}/${ant.project.name}-signed.jar"/>
+  <property name="aws.region" value="ap-southeast-2"/>
+  <property name="aws.kms.key" value="arn:aws:kms:ap-southeast-2:123456789012:key/your-key-id"/>
+  <property name="aws.credentials" value="access-key|secret-key|optional-session-token"/>
+  <property name="certchain" value="/path/to/full-chain.pem"/>
+
+  <exec executable="${jarsigner}">
+    <arg line="-J-cp -J${jsign.jar}"/>
+    <arg line="-providerClass net.jsign.jca.JsignJcaProvider"/>
+    <arg line="-providerArg ${aws.region}"/>
+    <arg line="-keystore NONE"/>
+    <arg line="-storetype AWS"/>
+    <arg line="-storepass ${aws.credentials}"/>
+    <arg line="-keypass ${aws.credentials}"/>
+    <arg line="-certchain ${certchain}"/>
+    <arg value="${dist.jar}"/>
+    <arg value="${aws.kms.key}"/>
+  </exec>
+</target>
+
 <target name="sign-jar-with-aws-kms">
   <property name="jarsigner" value="${env.JAVA_HOME}/bin/jarsigner"/>
   <property name="jsign.jar" value="/path/to/jsign-<version>.jar"/>

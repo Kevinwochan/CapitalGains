@@ -1,3 +1,32 @@
+<project name="example-suite" default="sign-jars">
+    <!-- Register ant-contrib tasks -->
+    <taskdef resource="net/sf/antcontrib/antlib.xml"/>
+
+    <target name="sign-jars">
+        <!-- Collect all JAR files under modules/**/dist/ -->
+        <path id="jar.files">
+            <fileset dir="modules">
+                <include name="**/dist/*.jar"/>
+            </fileset>
+        </path>
+
+        <!-- Iterate over each JAR file, signing each one -->
+        <foreach param="jarfile">
+            <path refid="jar.files"/>
+            <sequential>
+                <echo message="Signing @{jarfile}"/>
+                <!-- Replace below with your jarsigner or custom signing implementation -->
+                <!--
+                <exec executable="jarsigner">
+                    ...args for jarsigner/jsign...
+                </exec>
+                -->
+            </sequential>
+        </foreach>
+    </target>
+</project>
+
+
 <target name="-post-jar">
   <property name="jarsigner" value="${env.JAVA_HOME}/bin/jarsigner"/>
   <property name="jsign.jar" value="/path/to/jsign-<version>.jar"/>

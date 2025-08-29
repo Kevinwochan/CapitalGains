@@ -57,6 +57,10 @@ COLUMUMN_CONFIG = {
         "Avg Price",
         format="dollar",
     ),
+    "total_cost": st.column_config.NumberColumn(
+        "Total Cost",
+        format="dollar",
+    )
 }
 
 ACTIONS = ["Buy", "Sell", "DRP", "SPP"]
@@ -290,6 +294,7 @@ def calculate_capital_gains(trades_df):
                 units_remaining -= units_sold
                 buy = buy_parcel.copy(deep=True)
                 buy["units"] = units_sold
+                buy["consideration"] = units_sold * buy_parcel["avg_price"]
                 cgt_event.append(buy)
                 buy_parcel["units"] -= units_sold
                 capital_proceeds = units_sold * sell_parcel["avg_price"]
@@ -898,7 +903,7 @@ st.write(
     """,
 )
 st.image(
-    "images/download.png",
+    "./images/download.png",
     caption="You can download the consolidated sheet using the download button",
     width=300,
 )

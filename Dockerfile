@@ -1,11 +1,9 @@
 FROM python:3.12-slim
 
-WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
     libsqlite3-dev \
     && pip install pipx \
     && rm -rf /var/lib/apt/lists/*
@@ -16,10 +14,12 @@ ENV PATH="$PATH:/root/.local/bin"
 RUN pipx install uv
 
 # Create virtual environment
-RUN uv venv /app/.venv
+RUN uv venv /venv/
 
 # Activate virtual environment by setting PATH
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/venv/bin:$PATH"
+
+WORKDIR /app
 
 COPY ./app/requirements.txt requirements.txt
 

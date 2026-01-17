@@ -1,5 +1,7 @@
 """Trade Tracker"""
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 import yfinance as yf
@@ -922,7 +924,7 @@ st.write(
     """,
 )
 st.image(
-    "./images/download.png",
+    Path(__file__).resolve().parent / "images" / "download.png",
     caption="You can download the consolidated sheet using the download button",
     width=300,
 )

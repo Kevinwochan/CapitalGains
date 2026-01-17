@@ -33,6 +33,10 @@ COLUMUMN_CONFIG = {
         "Weight (%)",
         format="%.1f",
     ),
+    "return_pct": st.column_config.NumberColumn(
+        "Returns (%)",
+        format="%.1f",
+    ),
     "current_value": st.column_config.NumberColumn(
         "Current Value",
         format="dollar",
@@ -166,13 +170,13 @@ def parse_selfwealth_csv(csv, currency="AUD"):
     # translate this: 2021-05-28 00:00:00 to a Datetime object
     return trades
 
-
-def parse_stake_csv(csv, currency="AUD"):
-    """Trade Date	Settlement Date	Symbol	Side	Trade Identifier	Units	Avg. Price	Value	Fees	GST	Total Value	Currency
-    2024-11-01	2024-11-05	VAS - Vanguard Australian Shares Index ETF	Buy	194823564	37	100.39	3714.43	2.73	0.27	3717.43	AUD
+def parse_stake_xlsx(xlsx, currency="AUD"):
+    """Trade Date    Settlement Date    Symbol    Side    Trade Identifier    Units    Avg. Price    Value    Fees    GST    Total Value    Currency
+    2024-11-01    2024-11-05    VAS - Vanguard Australian Shares Index ETF    Buy    194823564    37    100.39    3714.43    2.73    0.27    3717.43    AUD
     """
-    trades = pd.read_csv(
-        csv,
+    trades = pd.read_excel(
+        xlsx,
+        sheet_name="Aus Equities",
         usecols=[
             "Trade Date",
             "Symbol",
@@ -186,13 +190,11 @@ def parse_stake_csv(csv, currency="AUD"):
             "Total Value",
             "Currency",
         ],
-        converters={
-            "Trade Date": lambda x: pd.to_datetime(x, format="%Y-%m-%d"),
-            "Units": int,
-            "Symbol": lambda x: (
-                x.split(" - ")[0] + ".AX" if currency == "AUD" else x.split(" - ")[0]
-            ),
-        },
+    )
+    trades["Trade Date"] = pd.to_datetime(trades["Trade Date"], format="%Y-%m-%d")
+    trades["Units"] = trades["Units"].astype(int)
+    trades["Symbol"] = trades["Symbol"].apply(
+        lambda x: x.split(" - ")[0] + ".AX" if currency == "AUD" else x.split(" - ")[0]
     )
 
     def parse_stake_row(row):
@@ -219,7 +221,6 @@ def parse_stake_csv(csv, currency="AUD"):
     trades = trades.apply(parse_stake_row, axis=1, result_type="expand")
     trades.columns = NORMALISED_COLUMNS
     return trades
-
 
 # match trades with buy parcels
 CAPITAL_GAIN_METHODS = [
@@ -586,7 +587,8 @@ def display_current_holdings(corrected_trades):
     current_holdings["weight_pct"] = (
         current_holdings["current_value"] / current_holdings["current_value"].sum()
     ) * 100
-    current_holdings["profit"] = current_holdings["profit"].map("{:.2f}".format)
+
+    current_holdings["return_pct"] = (current_holdings["profit"] / current_holdings["current_value"]) * 100
 
     current_holdings.sort_values(by="weight_pct", ascending=False, inplace=True)
     # profit is $1,123
@@ -721,12 +723,12 @@ def display_import_options():
         trades = pd.concat([trades, movement], ignore_index=True)
     st.subheader("Stake")
     stake_report = st.file_uploader(
-        "Tax & reporting -> Financial year reports -> Open in Excel and save the trade sheet as CSV ",
-        type=["csv"],
+        "Tax & reporting -> Financial year reports",
+        type=["xlsx"],
         key="stake",
     )
     if stake_report:
-        movement = parse_stake_csv(stake_report)
+        movement = parse_stake_xlsx(stake_report)
         trades = pd.concat([trades, movement], ignore_index=True)
     return trades
 

@@ -101,7 +101,8 @@ def parse_commsec_csv(csv, currency="AUD"):
     """Date	Reference	Details	Debit($)	Credit($)	Balance($)."""
     transactions = pd.read_csv(
         csv,
-        usecols=["Date", "Reference", "Details", "Debit($)", "Credit($)", "Balance($)"],
+        usecols=["Date", "Reference", "Details",
+                 "Debit($)", "Credit($)", "Balance($)"],
     )
     # 'C' means this is a contract transaction, only use those
     trades = transactions[transactions["Reference"].str.contains("C")]
@@ -123,7 +124,8 @@ def parse_commsec_csv(csv, currency="AUD"):
             new_row[4] = int(units)
             new_row[5] = float(avg_price)
             new_row[6] = float(consideration)
-            new_row[7] = abs(float(consideration) - (float(units) * float(avg_price)))
+            new_row[7] = abs(float(consideration) -
+                             (float(units) * float(avg_price)))
             new_row[8] = "Commsec CSV"
             new_row[9] = currency
             new_row[10] = financial_year(new_row[0])
@@ -170,6 +172,7 @@ def parse_selfwealth_csv(csv, currency="AUD"):
     # translate this: 2021-05-28 00:00:00 to a Datetime object
     return trades
 
+
 def parse_stake_xlsx(xlsx, currency="AUD"):
     """Trade Date    Settlement Date    Symbol    Side    Trade Identifier    Units    Avg. Price    Value    Fees    GST    Total Value    Currency
     2024-11-01    2024-11-05    VAS - Vanguard Australian Shares Index ETF    Buy    194823564    37    100.39    3714.43    2.73    0.27    3717.43    AUD
@@ -191,10 +194,12 @@ def parse_stake_xlsx(xlsx, currency="AUD"):
             "Currency",
         ],
     )
-    trades["Trade Date"] = pd.to_datetime(trades["Trade Date"], format="%Y-%m-%d")
+    trades["Trade Date"] = pd.to_datetime(
+        trades["Trade Date"], format="%Y-%m-%d")
     trades["Units"] = trades["Units"].astype(int)
     trades["Symbol"] = trades["Symbol"].apply(
-        lambda x: x.split(" - ")[0] + ".AX" if currency == "AUD" else x.split(" - ")[0]
+        lambda x: x.split(
+            " - ")[0] + ".AX" if currency == "AUD" else x.split(" - ")[0]
     )
 
     def parse_stake_row(row):
@@ -221,6 +226,7 @@ def parse_stake_xlsx(xlsx, currency="AUD"):
     trades = trades.apply(parse_stake_row, axis=1, result_type="expand")
     trades.columns = NORMALISED_COLUMNS
     return trades
+
 
 # match trades with buy parcels
 CAPITAL_GAIN_METHODS = [
@@ -300,7 +306,8 @@ def calculate_capital_gains(trades_df):
                 buy_parcel["units"] -= units_sold
                 capital_proceeds = units_sold * sell_parcel["avg_price"]
                 cost_base = units_sold * buy_parcel["avg_price"]
-                incidental_costs = buy_parcel["brokerage"] + sell_parcel["brokerage"]
+                incidental_costs = buy_parcel["brokerage"] + \
+                    sell_parcel["brokerage"]
                 # https://www.ato.gov.au/individuals-and-families/investments-and-assets/capital-gains-tax/calculating-your-cgt
                 capital_gain = capital_proceeds - cost_base - incidental_costs
                 if (
@@ -341,7 +348,8 @@ def display_capital_gains(
     cgt_events = calculate_capital_gains(trades_df)
     trading_years = sorted(trades_df["FY"].unique().tolist(), reverse=True)
     for year in trading_years:
-        cgt_events_in_year = list(filter(lambda x: x["FY"] == year, cgt_events))
+        cgt_events_in_year = list(
+            filter(lambda x: x["FY"] == year, cgt_events))
         if not cgt_events_in_year:
             continue
         year_gain = sum(
@@ -361,7 +369,8 @@ def display_capital_gains(
         )
         holdings = find_current_holdings(trades_df[trades_df["FY"] < year])
         holding_sum = (
-            holdings["total_cost"].sum() if holdings["total_cost"].sum() > 0 else 1
+            holdings["total_cost"].sum(
+            ) if holdings["total_cost"].sum() > 0 else 1
         )
         if year_gain > 0:
             st.markdown(
@@ -574,23 +583,27 @@ def display_current_holdings(corrected_trades):
     st.subheader(f"Cost: ${current_holdings['total_cost'].sum():,.2f}")
 
     profit = (
-        current_holdings["current_value"].sum() - current_holdings["total_cost"].sum()
+        current_holdings["current_value"].sum(
+        ) - current_holdings["total_cost"].sum()
     )
     if profit > 0:
         st.markdown(
-            f"### Unrealised profit: :green[{profit:,.2f} (+{(profit/current_holdings["current_value"].sum()*100):,.2f}%)]",
+            f"### Unrealised profit: :green[{profit:,.2f} (+{(profit/current_holdings['current_value'].sum()*100):,.2f}%)]",
         )
     else:
         st.markdown(
-            f"### Unrealised profit: :red[{profit:,.2f} ({(profit/current_holdings["current_value"].sum()*100):,.2f} %)]",
+            f"### Unrealised profit: :red[{profit:,.2f} ({(profit/current_holdings['current_value'].sum()*100):,.2f} %)]",
         )
     current_holdings["weight_pct"] = (
-        current_holdings["current_value"] / current_holdings["current_value"].sum()
+        current_holdings["current_value"] /
+        current_holdings["current_value"].sum()
     ) * 100
 
-    current_holdings["return_pct"] = (current_holdings["profit"] / current_holdings["current_value"]) * 100
+    current_holdings["return_pct"] = (
+        current_holdings["profit"] / current_holdings["current_value"]) * 100
 
-    current_holdings.sort_values(by="weight_pct", ascending=False, inplace=True)
+    current_holdings.sort_values(
+        by="weight_pct", ascending=False, inplace=True)
     # profit is $1,123
     styled_current_holdings = current_holdings.style.map(
         lambda x: "color:red" if float(x) < 0 else "color:green",
@@ -684,7 +697,8 @@ def display_editable_trade_table(trades):
 def to_editable_trades(trades):
     """Convert trades to editable format"""
     trades["ignore"] = False
-    trades = trades.sort_values(by=["code", "date", "avg_price"], ascending=True)
+    trades = trades.sort_values(
+        by=["code", "date", "avg_price"], ascending=True)
     trades = trades.reset_index(drop=True)
     return trades
 
@@ -770,7 +784,8 @@ def display_historical_portfolio(corrected_trades):
         st.info("Please upload a transactions to view your historical portfolio")
         return
 
-    report_type = st.selectbox("Select report type", ["By Financial Year", "By Date"])
+    report_type = st.selectbox("Select report type", [
+                               "By Financial Year", "By Date"])
     codes = corrected_trades["code"].unique()
     historical_market_data = pd.DataFrame()
     try:
@@ -799,7 +814,8 @@ def display_historical_portfolio(corrected_trades):
             market_value = 0
             cost = 0
             for _, holding in holdings.iterrows():
-                day = nearest_business_day(pd.Timestamp(year=year, month=6, day=30))
+                day = nearest_business_day(
+                    pd.Timestamp(year=year, month=6, day=30))
                 cost += holding["units"] * holding["avg_price"]
                 market_unit_price = get_market_price(
                     historical_market_data,
@@ -839,7 +855,8 @@ def display_historical_portfolio(corrected_trades):
             columns=["date", "cost"],
         )
 
-        holdings = pd.DataFrame(columns=["code", "units", "total_cost", "avg_price"])
+        holdings = pd.DataFrame(
+            columns=["code", "units", "total_cost", "avg_price"])
         corrected_trades.sort_values("date", inplace=True)
         # for every day traded
         for date, trade_window in corrected_trades.groupby("date"):
